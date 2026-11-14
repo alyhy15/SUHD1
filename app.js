@@ -713,94 +713,18 @@
   /* ================= MISSION GUIDE ================= */
   let AI = null;
   (async () => { try { if (window.claude && typeof window.claude.use === 'function') AI = await window.claude.use('sample'); } catch (_) { AI = null; } })();
-  /* ---------- Offline guide: matcher over the verified Q&A bank (no API needed) ---------- */
-  const KBG = (() => {
-    const AR_STOP = new Set('ما ماذا هل في من على عن الى الي هو هي هذا هذه هذي ذلك كان كانت او و ثم لا لم لن قد كيف لماذا متى كم وش ليش ليه اي يا انا انت اللي الذي التي تم شو ايش عشان علشان مع بعد قبل كل بس يعني ممكن اريد ابي ابغى ابغي اعرف قل لي لي عندها عنده مركبه المركبه مريخ المريخ ناسا'.split(' '));
-    const EN_STOP = new Set('the a an is are was were do does did what why how when where which who of to in on for and or it its this that with by be can i you me my about tell please did has have had there they them would could should much many rover mars nasa'.split(' '));
-    const norm = s => (s || '').toLowerCase().replace(/[ً-ٰٟـ]/g, '').replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
-      .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/ö/g, 'o').replace(/[^\p{L}\p{N}.]+/gu, ' ').replace(/\s+/g, ' ').trim();
-    const stem = w => {
-      if (/^[a-z]/.test(w)) { if (w.length > 4 && w.endsWith('ing')) w = w.slice(0, -3); else if (w.length > 3 && w.endsWith('ed')) w = w.slice(0, -2); else if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) w = w.slice(0, -1); return w; }
-      for (const p of ['وال', 'بال', 'كال', 'فال', 'لل', 'ال']) if (w.startsWith(p) && w.length - p.length >= 2) { w = w.slice(p.length); break; }
-      if (w.length >= 5 && /^[وفب]/.test(w)) w = w.slice(1);
-      for (const x of ['هما', 'ها', 'هم', 'كم', 'وا', 'ات', 'ون', 'ين', 'ان']) if (w.endsWith(x) && w.length - x.length >= 3) { w = w.slice(0, -x.length); break; }
-      return w;
-    };
-    const toks = s => norm(s).split(' ').filter(w => w && !AR_STOP.has(w) && !EN_STOP.has(w)).map(stem).filter(w => w.length > 1 || /\d/.test(w));
-    const lev1 = (a, b) => { if (Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, e = 0; while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++e > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } } return e + (a.length - i) + (b.length - j) <= 1; };
-    const tokEq = (q, k) => q === k || (k.length >= 3 && q.length >= 3 && Math.min(q.length, k.length) / Math.max(q.length, k.length) >= 0.6 && (q.startsWith(k) || k.startsWith(q))) || (k.length >= 6 && q.length >= 6 && lev1(q, k));
-    const intent = s => { const n = norm(s); return /(^| )(متي|when|what year|اي سنه|في اي عام)( |$)/.test(n) ? 'when' : /(^| )(كم|how many|how much|how far|how long)( |$)/.test(n) ? 'howmany' : /(^| )(ليش|لماذا|ليه|لم|why)( |$)/.test(n) ? 'why' : /(^| )(كيف|how)( |$)/.test(n) ? 'how' : null; };
-    let IDX = null;
-    const build = () => IDX = window.QA.map(e => ({ e, keys: e.k.map(k => toks(k)).filter(a => a.length), qt: new Set([...toks(e.q.ar), ...toks(e.q.en)]) }));
-    function search(q, step) {
-      if (!IDX) build();
-      if (/(^| )(من|مين) (انت|انتي)|انت مين|who are you|are you (an )?ai/.test(norm(q))) return [{ e: window.QA.find(e => e.id === 'whoami'), sc: 9 }];
-      const qt = toks(q), it = intent(q); if (!qt.length) return [];
-      const has = k => qt.some(t => tokEq(t, k));
-      return IDX.map(({ e, keys, qt: et }) => {
-        let sc = 0; const hit = new Set();
-        for (const kw of keys) if (kw.every(has)) { sc += 2 * kw.length + (kw.length > 1 ? 1 : 0); kw.forEach(k => hit.add(k)); }
-        for (const t of qt) if (!hit.has(t) && [...et].some(k => tokEq(t, k))) sc += 0.75;
-        if (sc > 0 && it) sc += e.t === it ? 2 : (it === 'why' || it === 'when') ? -1 : 0;
-        if (sc > 0 && e.st.includes(step)) sc += 0.75;
-        return { e, sc };
-      }).filter(r => r.sc >= 2).sort((a, b) => b.sc - a.sc);
-    }
-    return { search, norm, toks };
-  })();
-  const history = [];
   const glog = $('#glog');
   function gmsg(who, text) { const d = document.createElement('div'); d.className = 'gm ' + who; d.textContent = text; glog.appendChild(d); glog.scrollTop = glog.scrollHeight; return d; }
-  const QBY = id => window.QA.find(e => e.id === id);
-  function srcLine(d, key) { const s = key && window.SRC[key]; if (!s) return; const a = document.createElement('div'); a.className = 'gsrc'; a.innerHTML = `${esc(C().guide.src)} <a href="${s.u}" target="_blank" rel="noopener">${esc(s.t)}</a>`; d.appendChild(a); }
-  function suggest(ids, label) {
-    ids = [...new Set(ids)].filter(QBY).slice(0, 3); if (!ids.length) return;
-    const w = document.createElement('div'); w.className = 'gsug';
-    if (label) { const l = document.createElement('small'); l.textContent = label; w.appendChild(l); }
-    ids.forEach(id => { const b = document.createElement('button'); b.type = 'button'; b.dataset.q = id; b.textContent = QBY(id).q[S.lang]; w.appendChild(b); });
-    glog.appendChild(w); glog.scrollTop = glog.scrollHeight;
-  }
-  const stepSugg = () => window.SUGG[S.screen || 'opening'] || window.SUGG.opening;
-  const asked = new Set();
-  function kbAnswer(entry, alsoIds) {
-    const d = gmsg('bot', entry.a[S.lang]); srcLine(d, entry.s); asked.add(entry.id); history.push(`Guide: ${entry.a.en}`);
-    const rest = (alsoIds || []).concat(stepSugg()).filter(id => id !== entry.id && !asked.has(id));
-    suggest(rest, C().guide.more);
-  }
-  function typing(fn) { const d = gmsg('bot typing', '•••'); setTimeout(() => { d.remove(); fn(); }, 420 + Math.random() * 300); }
-  function kbAsk(q) {
-    const r = KBG.search(q, S.screen || 'opening');
-    typing(() => {
-      if (!r.length) { gmsg('bot', C().guide.noEv); suggest(stepSugg().filter(id => !asked.has(id)).concat(stepSugg())); return; }
-      kbAnswer(r[0].e, r.slice(1, 4).filter(x => x.sc >= r[0].sc * 0.5).map(x => x.e.id));
-    });
-  }
-  function kbMode(m) {
-    const key = HINTK[S.screen] || 'opening';
-    typing(() => {
-      if (m === 'hint') { gmsg('bot', window.HINTS[S.lang][key]); }
-      else { gmsg('bot', window.EXPLAIN[S.lang][key] || window.EXPLAIN[S.lang].opening); }
-      suggest(stepSugg().filter(id => !asked.has(id)), C().guide.more);
-    });
-  }
-  function toggleGuide(v) {
-    S.guideOpen = v ?? !S.guideOpen; $('#guide').classList.toggle('on', S.guideOpen);
-    if (S.guideOpen && !glog.children.length) { gmsg('bot', AI ? C().guide.hello : C().guide.helloKB); suggest(stepSugg()); }
-    if (S.guideOpen && innerWidth > 860) setTimeout(() => $('#gin').focus({ preventScroll: true }), 300);
-  }
+  function toggleGuide(v) { S.guideOpen = v ?? !S.guideOpen; $('#guide').classList.toggle('on', S.guideOpen); if (S.guideOpen && !glog.children.length) gmsg('bot', C().guide.hello); if (S.guideOpen) setTimeout(() => $('#gin').focus({ preventScroll: true }), 300); }
   $('#gbtn').onclick = () => toggleGuide(); $('#gClose').onclick = () => toggleGuide(false);
-  glog.addEventListener('click', e => {
-    const b = e.target.closest('.gsug button'); if (!b) return; const en = QBY(b.dataset.q); if (!en) return;
-    TRK.guide(); gmsg('me', en.q[S.lang]); history.push(`Student: ${en.q.en}`);
-    if (AI) askAI('ask', en.q[S.lang], en); else typing(() => kbAnswer(en));
-  });
   function stepContext() {
     const id = S.screen || 'opening', c = C(), ch2 = c.ch2;
     const map = { ch1intro: c.ch1.intro, solar: c.ch1.solar.q + ' ' + c.ch1.solar.steps.join(' '), pancam: c.ch1.pancam.q + ' ' + c.ch1.pancam.task, arm: c.ch1.arm.q + ' ' + c.ch1.arm.lead, ch1outro: c.ch1.outro, case: ch2.case.lead, clue1: ch2.clue1.lead + ' ' + ch2.clue1.think, clue2: ch2.clue2.lead + ' ' + ch2.clue2.elim, clue3: ch2.clue3.lead, verdict: ch2.verdict.lead, ch2outro: ch2.outro, order: c.ch3.order.lead, read: c.ch3.read.lead, legacy: c.ch3.legacy.p, fin: c.fin.lead, final: c.fin.thanks };
     const out = (S.ss.case && S.ss.case.out) || [];
     return `Step "${id}": ${map[id] || ''}${out.length ? ` (Suspects already ruled out: ${out.join(', ')})` : ''}`;
   }
-  async function askAI(mode, q, fbEntry) {
+  const history = [];
+  async function askAI(mode, q) {
     const c = C(), lang = S.lang === 'ar' ? 'simple Modern Standard Arabic' : 'simple English';
     const noEv = S.lang === 'ar' ? 'لا يوجد عندي دليل على هذا.' : "I don't have evidence for that.";
     const task = mode === 'hint' ? 'The student asked for a HINT for the current step. Give a short nudge that helps them think. Do NOT give the answer.'
@@ -822,25 +746,20 @@ TASK: ${task}`;
       const r = await AI(prompt, { cache: false, modelTier: 'quick', onText: ({ text }) => { bubble.textContent = text; glog.scrollTop = glog.scrollHeight; } });
       bubble.textContent = r.text; history.push(`Guide: ${r.text}`);
     } catch (e) {
-      bubble.remove(); if (e && e.code === 'not_granted') AI = null;
-      if (mode === 'ask') { if (fbEntry) kbAnswer(fbEntry); else kbAsk(q); } else kbMode(mode);
+      if (e && e.code === 'not_granted') { AI = null; bubble.textContent = c.guide.off + '\n' + window.HINTS[S.lang][HINTK[S.screen] || 'opening']; }
+      else bubble.textContent = c.guide.err;
     }
   }
   function sourceMsg() { const d = gmsg('bot', ''); d.innerHTML = (SRCK[S.screen] || ['end']).map(k => window.SRC[k]).map(s => `<a href="${s.u}" target="_blank" rel="noopener">${esc(s.t)}</a>`).join('<br>'); }
   $('#gpre').onclick = e => {
     const b = e.target.closest('[data-g]'); if (!b) return; const m = b.dataset.g; TRK.guide(); gmsg('me', b.textContent); history.push(`Student: ${b.textContent}`);
     if (m === 'source') return sourceMsg();
-    if (AI) askAI(m); else kbMode(m);
+    if (AI) askAI(m); else gmsg('bot', C().guide.off + '\n' + window.HINTS[S.lang][HINTK[S.screen] || 'opening']);
   };
   $('#gform').onsubmit = e => {
     e.preventDefault(); const q = $('#gin').value.trim(); if (!q) return; TRK.guide(); $('#gin').value = ''; gmsg('me', q); history.push(`Student: ${q}`);
-    if (AI) askAI('ask', q); else kbAsk(q);
+    if (AI) askAI('ask', q); else { gmsg('bot', C().guide.off + '\n' + window.HINTS[S.lang][HINTK[S.screen] || 'opening']); sourceMsg(); }
   };
-  (() => { const st = document.createElement('style'); st.textContent = `.gm .gsrc{margin-top:6px;font-size:11.5px;opacity:.75;line-height:1.45}.gm .gsrc a{color:var(--sky2)}
-.gm.typing{letter-spacing:3px;opacity:.7;animation:gpulse 1s infinite}@keyframes gpulse{50%{opacity:.35}}
-.gsug{display:flex;flex-direction:column;align-items:flex-start;gap:5px;align-self:stretch}.gsug small{font-size:11.5px;opacity:.6;padding-inline-start:2px}
-.gsug button{font:inherit;font-size:13px;text-align:start;line-height:1.45;padding:6px 11px;border-radius:12px;border:1px solid rgba(111,214,208,.3);color:var(--sky2);background:rgba(111,214,208,.05);cursor:pointer;max-width:100%}
-.gsug button:hover{background:rgba(111,214,208,.14)}`; document.head.appendChild(st); })();
 
   /* ================= ADMIN: edit texts (stored in the artifact's db) ================= */
   const ADM = { db: null, user: null, allowed: false, overrides: { ar: {}, en: {} }, draft: null, tab: 'ar', q: '' };
