@@ -115,7 +115,7 @@
   function modal(html) { $('#mbox').innerHTML = `<div style="display:flex;justify-content:flex-end"><button class="tbtn" id="mClose">${esc(C().close)}</button></div>` + html; $('#modal').classList.add('on'); on('mClose', closeModal); }
   function closeModal() { $('#modal').classList.remove('on'); }
   $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); toggleGuide(false); if ($('#impact').classList.contains('on')) closeImpact(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); toggleGuide(false); } });
   document.addEventListener('click', e => { const z = e.target.closest('[data-zoom]'); if (z) { const id = z.dataset.zoom, s = window.SRC[id]; modal(`<img src="assets/${id}.jpg" alt=""><p style="font-family:var(--mono);font-size:12px;color:var(--dim)">${id} · ${esc(s.c || '')} · <a href="${s.u}" target="_blank" rel="noopener">NASA</a></p>`); } });
   $('#evChip').onclick = () => modal(`<h3 style="margin-top:0">${esc(C().board)}</h3>` + (S.ev.length ? S.ev.map(k => { const d = evData(k), s = window.SRC[d.src]; return `<div class="evc"><b>${esc(d.t)}</b><p>${esc(d.p)}</p><a href="${s.u}" target="_blank" rel="noopener" style="font-size:12px">${esc(s.t)}</a></div>`; }).join('') : `<p>${esc(C().boardEmpty)}</p>`));
   $('#srcBtn').onclick = () => modal(`<h3 style="margin-top:0">${esc(C().srcTitle)}</h3><p style="color:var(--muted)">${esc(C().srcNote)}</p><ul>${Object.values(window.SRC).map(s => `<li><a href="${s.u}" target="_blank" rel="noopener">${esc(s.t)}</a>${s.c ? ` <span style="color:var(--dim)">— ${esc(s.c)}</span>` : ''}</li>`).join('')}</ul>` + (ADM.allowed ? `<div style="margin-top:14px"><button class="btn" id="bAdmin">${esc(C().admin.open)}</button></div>` : ''));
@@ -500,6 +500,56 @@
   const loadImg = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
   const F = (w, sz, fam = 'IBM Plex Sans Arabic') => `${w} ${sz}px "${fam}", system-ui, sans-serif`;
   const CW = 1080, CH = 1350, HERO = { x: 290, y: 262, s: 500 };
+  /* ---------- Tiny QR encoder (byte mode, ECC level M, versions 1–10). No external service. ---------- */
+  const QR = (() => {
+    const ECC = [0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26], BLK = [0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
+    const raw = v => { let r = (16 * v + 128) * v + 64; if (v >= 2) { const n = Math.floor(v / 7) + 2; r -= (25 * n - 10) * n - 55; if (v >= 7) r -= 36; } return r; };
+    const cap = v => Math.floor(raw(v) / 8) - ECC[v] * BLK[v];
+    const mul = (x, y) => { let z = 0; for (let i = 7; i >= 0; i--) { z = (z << 1) ^ ((z >>> 7) * 0x11D); z ^= ((y >>> i) & 1) * x; } return z & 255; };
+    const rsDiv = d => { const r = Array(d).fill(0); r[d - 1] = 1; let root = 1; for (let i = 0; i < d; i++) { for (let j = 0; j < d; j++) { r[j] = mul(r[j], root); if (j + 1 < d) r[j] ^= r[j + 1]; } root = mul(root, 2); } return r; };
+    const rsRem = (data, div) => { const r = div.map(() => 0); for (const b of data) { const f = b ^ r.shift(); r.push(0); div.forEach((c, i) => r[i] ^= mul(c, f)); } return r; };
+    const align = v => { if (v === 1) return []; const n = Math.floor(v / 7) + 2, step = Math.ceil((v * 4 + 4) / (n * 2 - 2)) * 2, out = [6]; for (let i = 0, p = v * 4 + 10; i < n - 1; i++, p -= step) out.splice(1, 0, p); return out; };
+    const MASK = [(x, y) => (x + y) % 2 === 0, (x, y) => y % 2 === 0, x => x % 3 === 0, (x, y) => (x + y) % 3 === 0, (x, y) => (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0,
+      (x, y) => x * y % 2 + x * y % 3 === 0, (x, y) => (x * y % 2 + x * y % 3) % 2 === 0, (x, y) => ((x + y) % 2 + x * y % 3) % 2 === 0];
+    function make(text) {
+      const data = Array.from(new TextEncoder().encode(text)); let v = 1;
+      while (v <= 10 && 4 + (v < 10 ? 8 : 16) + data.length * 8 > cap(v) * 8) v++;
+      if (v > 10) return null;
+      const bb = [], app = (val, len) => { for (let i = len - 1; i >= 0; i--) bb.push((val >>> i) & 1); };
+      app(4, 4); app(data.length, v < 10 ? 8 : 16); data.forEach(b => app(b, 8));
+      const C8 = cap(v) * 8; app(0, Math.min(4, C8 - bb.length)); app(0, (8 - bb.length % 8) % 8);
+      for (let p = 0xEC; bb.length < C8; p ^= 0xEC ^ 0x11) app(p, 8);
+      const dc = []; for (let i = 0; i < bb.length; i += 8) { let x = 0; for (let j = 0; j < 8; j++) x = (x << 1) | bb[i + j]; dc.push(x); }
+      const nb = BLK[v], ec = ECC[v], rw = Math.floor(raw(v) / 8), nShort = nb - rw % nb, sLen = Math.floor(rw / nb), div = rsDiv(ec), blocks = [];
+      for (let i = 0, k = 0; i < nb; i++) { const d = dc.slice(k, k + sLen - ec + (i < nShort ? 0 : 1)); k += d.length; const e = rsRem(d, div); if (i < nShort) d.push(0); blocks.push(d.concat(e)); }
+      const cw = []; for (let i = 0; i < blocks[0].length; i++) blocks.forEach((b, j) => { if (i !== sLen - ec || j >= nShort) cw.push(b[i]); });
+      const n = v * 4 + 17, M = [...Array(n)].map(() => Array(n).fill(false)), F = [...Array(n)].map(() => Array(n).fill(false));
+      const set = (x, y, d) => { M[y][x] = d; F[y][x] = true; };
+      for (let i = 0; i < n; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+      const finder = (cx, cy) => { for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) { const d = Math.max(Math.abs(dx), Math.abs(dy)), x = cx + dx, y = cy + dy; if (x >= 0 && x < n && y >= 0 && y < n) set(x, y, d !== 2 && d !== 4); } };
+      finder(3, 3); finder(n - 4, 3); finder(3, n - 4);
+      const al = align(v), L = al.length - 1;
+      al.forEach((a, i) => al.forEach((b, j) => { if ((i === 0 && j === 0) || (i === 0 && j === L) || (i === L && j === 0)) return; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(a + dx, b + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1); }));
+      const fmt = mask => { const d = (0 << 3) | mask; let r = d; for (let i = 0; i < 10; i++) r = (r << 1) ^ ((r >>> 9) * 0x537); const bits = ((d << 10) | r) ^ 0x5412, g = i => ((bits >>> i) & 1) !== 0;
+        for (let i = 0; i <= 5; i++) set(8, i, g(i)); set(8, 7, g(6)); set(8, 8, g(7)); set(7, 8, g(8)); for (let i = 9; i < 15; i++) set(14 - i, 8, g(i));
+        for (let i = 0; i < 8; i++) set(n - 1 - i, 8, g(i)); for (let i = 8; i < 15; i++) set(8, n - 15 + i, g(i)); set(8, n - 8, true); };
+      fmt(0);
+      if (v >= 7) { let r = v; for (let i = 0; i < 12; i++) r = (r << 1) ^ ((r >>> 11) * 0x1F25); const bits = (v << 12) | r; for (let i = 0; i < 18; i++) { const bt = ((bits >>> i) & 1) !== 0, a = n - 11 + i % 3, b = Math.floor(i / 3); set(a, b, bt); set(b, a, bt); } }
+      let bi = 0; for (let right = n - 1; right >= 1; right -= 2) { if (right === 6) right = 5; for (let vert = 0; vert < n; vert++) for (let j = 0; j < 2; j++) { const x = right - j, up = ((right + 1) & 2) === 0, y = up ? n - 1 - vert : vert; if (!F[y][x] && bi < cw.length * 8) { M[y][x] = ((cw[bi >>> 3] >>> (7 - (bi & 7))) & 1) !== 0; bi++; } } }
+      const base = M.map(r => r.slice()); let best = null, bestP = Infinity;
+      for (let m = 0; m < 8; m++) {
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) M[y][x] = F[y][x] ? M[y][x] : (base[y][x] !== MASK[m](x, y));
+        fmt(m); let p = 0, dark = 0;
+        for (let y = 0; y < n; y++) for (let k = 0; k < 2; k++) { let run = 1; for (let x = 1; x <= n; x++) { const a = k ? M[x - 1] && M[x - 1][y] : M[y][x - 1], b = x < n ? (k ? M[x][y] : M[y][x]) : null; if (b === a) run++; else { if (run >= 5) p += run - 2; run = 1; } } }
+        for (let y = 0; y < n - 1; y++) for (let x = 0; x < n - 1; x++) { const c = M[y][x]; if (c === M[y][x + 1] && c === M[y + 1][x] && c === M[y + 1][x + 1]) p += 3; }
+        M.forEach(r => r.forEach(c => dark += c)); p += Math.floor(Math.abs(dark * 20 - n * n * 10) / (n * n)) * 10;
+        if (p < bestP) { bestP = p; best = M.map(r => r.slice()); }
+      }
+      return best;
+    }
+    return { make };
+  })();
+
   async function drawFG() {
     const c = C().fin, f = S.ss.fin, rtl = S.lang === 'ar';
     const W = CW, H = CH, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d');
@@ -534,16 +584,31 @@
       out.slice(0, maxLines).forEach((l, i) => { const last = i === maxLines - 1 && out.length > maxLines; txt(last ? fit(l, maxW, font) : l, rtl ? X - 30 : X + 30, y, font, col); y += lh; }); };
     const TC = ['#f0a06a', '#6fd6d0', '#7fd99a']; let prevY = null;
     chainTexts(f).forEach((t, i) => { if (prevY != null) { g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 2; g.beginPath(); g.moveTo(rtl ? X - 8 : X + 8, prevY - 3); g.lineTo(rtl ? X - 8 : X + 8, y - 17); g.stroke(); } g.fillStyle = TC[i]; g.beginPath(); g.arc(rtl ? X - 8 : X + 8, y - 9, 7, 0, 7); g.fill(); prevY = y - 9; wrap(c.s[i].replace(/…$/, '') + ' ' + t, W - 2 * M - 30, 38, F(600, 27), '#f4ece4', 2); y += 8; });
-    // name + stats
+    // name + stats (kept clear of the QR tile on the other side)
+    const qrM = c.link ? QR.make(c.link) : null, QS = 5, QQ = 3, QT = qrM ? (qrM.length + 2 * QQ) * QS : 0, textW = W - 2 * M - (qrM ? QT + 40 : 0);
     y = Math.max(y + 12, 1110);
-    txt(f.name.trim(), X, y, F(700, 40), '#ffffff'); y += 36;
+    txt(fit(f.name.trim(), textW, F(700, 40)), X, y, F(700, 40), '#ffffff'); y += 36;
     const ft = f.first.filter(Boolean).length;
-    txt(`${c.role} · ${S.ev.length} ${c.evN} · ${c.chainDone} ${ft}/2 ${c.firstTry}`, X, y, F(400, 21), '#a3adb6');
-    // call to action band
-    const by = 1196, bh = 104; g.fillStyle = '#e0773f'; g.beginPath(); g.roundRect(M - 10, by, W - 2 * M + 20, bh, 22); g.fill();
-    txt(c.cta, rtl ? W - M + 10 - 28 : M - 10 + 28, by + 44, F(700, 30), '#1a0b04');
-    txt(c.cta2 + (c.link ? '  ·  ' + c.link : ''), rtl ? W - M + 10 - 28 : M - 10 + 28, by + 80, F(500, 20), '#3a1a08');
-    g.direction = rtl ? 'rtl' : 'ltr'; g.font = F(600, 18); g.fillStyle = '#3a1a08'; g.textAlign = rtl ? 'left' : 'right'; g.fillText(c.tags, rtl ? M + 18 : W - M - 18, by + 80);
+    const stat = `${c.role} · ${S.ev.length} ${c.evN} · ${c.chainDone} ${ft}/2 ${c.firstTry}`; let fs = 21; while (fs > 15) { g.font = F(400, fs); if (g.measureText(stat).width <= textW) break; fs--; }
+    txt(fit(stat, textW, F(400, fs)), X, y, F(400, fs), '#a3adb6');
+    // call to action band + QR to the public site (marketing)
+    const by = 1186, bh = 124, bx0 = rtl ? W - M + 10 - 28 : M - 10 + 28; g.fillStyle = '#e0773f'; g.beginPath(); g.roundRect(M - 10, by, W - 2 * M + 20, bh, 22); g.fill();
+    if (qrM) {
+      const bw = W - 2 * M - QT - 50;
+      txt(fit(c.cta, bw, F(700, 30)), bx0, by + 42, F(700, 30), '#1a0b04');
+      txt(fit(c.scan, bw, F(600, 23)), bx0, by + 78, F(600, 23), '#2a1206');
+      const shown = c.link.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      g.font = F(500, 17); g.fillStyle = '#3a1a08';
+      if (rtl) { let x = bx0; g.textAlign = 'right'; for (const w of [...c.tags.split(/\s+/).filter(Boolean), shown]) { g.direction = /[\u0600-\u06FF]/.test(w) ? 'rtl' : 'ltr'; g.fillText(w, x, by + 108); x -= g.measureText(w).width + 18; } }
+      else { g.direction = 'ltr'; g.textAlign = 'left'; g.fillText(shown + '   ' + c.tags.replace(/\s+/g, ' '), bx0, by + 108); }
+      const qx = rtl ? M + 8 : W - M - 8 - QT, qy = by + bh - QT - 12;
+      g.save(); g.shadowColor = 'rgba(0,0,0,.45)'; g.shadowBlur = 24; g.fillStyle = '#ffffff'; g.beginPath(); g.roundRect(qx - 6, qy - 6, QT + 12, QT + 12, 16); g.fill(); g.restore();
+      g.fillStyle = '#0b0f12'; qrM.forEach((row, yy) => row.forEach((on, xx) => { if (on) g.fillRect(qx + (xx + QQ) * QS, qy + (yy + QQ) * QS, QS, QS); }));
+    } else {
+      txt(c.cta, bx0, by + 50, F(700, 30), '#1a0b04');
+      txt(c.cta2, bx0, by + 90, F(500, 20), '#3a1a08');
+      g.direction = rtl ? 'rtl' : 'ltr'; g.font = F(600, 18); g.fillStyle = '#3a1a08'; g.textAlign = rtl ? 'left' : 'right'; g.fillText(c.tags, rtl ? M + 18 : W - M - 18, by + 90);
+    }
     // credits
     g.direction = 'ltr'; g.textAlign = 'center'; g.font = F(400, 14); g.fillStyle = '#6d7883';
     g.fillText('Image: NASA/JPL-Caltech/Cornell/ASU (PIA22929) · Last Signal · Team Suhd · NASA Space Apps Challenge 2026', W / 2, H - 22);
@@ -605,7 +670,7 @@
         liveRAF = requestAnimationFrame(frame);
       });
       panel(head(c.kicker2, c.title2) + `<p style="font-size:17px">${esc(c.thanks)}</p><p class="lead">${esc(c.share)}</p>
-        <div style="display:grid;gap:10px"><button class="btn main" id="bDl" style="flex:none">⬇ ${esc(c.download)}</button><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="bCopy">${esc(c.copy)}</button><button class="btn" id="bAgain">${esc(c.again)}</button><button class="btn" id="bImpact">${esc(C().impact.title)}</button></div><div class="err" id="dlMsg"></div></div>`, '', anim, () => {
+        <div style="display:grid;gap:10px"><button class="btn main" id="bDl" style="flex:none">⬇ ${esc(c.download)}</button><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="bCopy">${esc(c.copy)}</button><button class="btn" id="bAgain">${esc(c.again)}</button></div><div class="err" id="dlMsg"></div></div>`, '', anim, () => {
         on('bDl', async () => {
           if (!s.fg) return; const msg = $('#dlMsg');
           const out = document.createElement('canvas'); out.width = CW; out.height = CH; const og = out.getContext('2d'); drawBG(og, performance.now() / 1000); og.drawImage(s.fg, 0, 0);
@@ -619,7 +684,7 @@
           s.url = out.toDataURL('image/png');
         });
         on('bCopy', () => { const t = c.shareText + (c.link ? '\n' + c.link : '') + '\n' + c.tags; try { navigator.clipboard.writeText(t).then(() => { $('#bCopy').textContent = c.copied; }).catch(() => {}); } catch (_) {} });
-        on('bAgain', restart); on('bImpact', openImpact);
+        on('bAgain', restart);
       });
     }
   };
@@ -708,23 +773,99 @@
     openingText();
   }
   $('#osLang').onclick = () => $('#langBtn').onclick();
-  $('#langBtn').onclick = () => { S.lang = S.lang === 'ar' ? 'en' : 'ar'; applyLang(); if (S.screen) { mediaKey = null; render(false); reframe(); } if ($('#admin').classList.contains('on')) renderAdmin(); if ($('#impact').classList.contains('on')) renderImpact(); };
+  $('#langBtn').onclick = () => { S.lang = S.lang === 'ar' ? 'en' : 'ar'; applyLang(); if (S.screen) { mediaKey = null; render(false); reframe(); } if ($('#admin').classList.contains('on')) renderAdmin(); };
 
   /* ================= MISSION GUIDE ================= */
   let AI = null;
   (async () => { try { if (window.claude && typeof window.claude.use === 'function') AI = await window.claude.use('sample'); } catch (_) { AI = null; } })();
+  /* ---------- Offline guide: matcher over the verified Q&A bank (no API needed) ---------- */
+  const KBG = (() => {
+    const AR_STOP = new Set('ما ماذا هل في من على عن الى الي هو هي هذا هذه هذي ذلك كان كانت او و ثم لا لم لن قد كيف لماذا متى كم وش ليش ليه اي يا انا انت اللي الذي التي تم شو ايش عشان علشان مع بعد قبل كل بس يعني ممكن اريد ابي ابغى ابغي اعرف قل لي لي عندها عنده مركبه المركبه مريخ المريخ ناسا'.split(' '));
+    const EN_STOP = new Set('the a an is are was were do does did what why how when where which who of to in on for and or it its this that with by be can i you me my about tell please did has have had there they them would could should much many rover mars nasa'.split(' '));
+    const norm = s => (s || '').toLowerCase().replace(/[ً-ٰٟـ]/g, '').replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
+      .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/ö/g, 'o').replace(/[^\p{L}\p{N}.]+/gu, ' ').replace(/\s+/g, ' ').trim();
+    const stem = w => {
+      if (/^[a-z]/.test(w)) { if (w.length > 4 && w.endsWith('ing')) w = w.slice(0, -3); else if (w.length > 3 && w.endsWith('ed')) w = w.slice(0, -2); else if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) w = w.slice(0, -1); return w; }
+      for (const p of ['وال', 'بال', 'كال', 'فال', 'لل', 'ال']) if (w.startsWith(p) && w.length - p.length >= 2) { w = w.slice(p.length); break; }
+      if (w.length >= 5 && /^[وفب]/.test(w)) w = w.slice(1);
+      for (const x of ['هما', 'ها', 'هم', 'كم', 'وا', 'ات', 'ون', 'ين', 'ان']) if (w.endsWith(x) && w.length - x.length >= 3) { w = w.slice(0, -x.length); break; }
+      return w;
+    };
+    const toks = s => norm(s).split(' ').filter(w => w && !AR_STOP.has(w) && !EN_STOP.has(w)).map(stem).filter(w => w.length > 1 || /\d/.test(w));
+    const lev1 = (a, b) => { if (Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, e = 0; while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++e > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } } return e + (a.length - i) + (b.length - j) <= 1; };
+    const tokEq = (q, k) => q === k || (k.length >= 3 && q.length >= 3 && Math.min(q.length, k.length) / Math.max(q.length, k.length) >= 0.6 && (q.startsWith(k) || k.startsWith(q))) || (k.length >= 6 && q.length >= 6 && lev1(q, k));
+    const intent = s => { const n = norm(s); return /(^| )(متي|when|what year|اي سنه|في اي عام)( |$)/.test(n) ? 'when' : /(^| )(كم|how many|how much|how far|how long)( |$)/.test(n) ? 'howmany' : /(^| )(ليش|لماذا|ليه|لم|why)( |$)/.test(n) ? 'why' : /(^| )(كيف|how)( |$)/.test(n) ? 'how' : null; };
+    let IDX = null;
+    const build = () => IDX = window.QA.map(e => ({ e, keys: e.k.map(k => toks(k)).filter(a => a.length), qt: new Set([...toks(e.q.ar), ...toks(e.q.en)]) }));
+    function search(q, step) {
+      if (!IDX) build();
+      if (/(^| )(من|مين) (انت|انتي)|انت مين|who are you|are you (an )?ai/.test(norm(q))) return [{ e: window.QA.find(e => e.id === 'whoami'), sc: 9 }];
+      const qt = toks(q), it = intent(q); if (!qt.length) return [];
+      const has = k => qt.some(t => tokEq(t, k));
+      return IDX.map(({ e, keys, qt: et }) => {
+        let sc = 0; const hit = new Set();
+        for (const kw of keys) if (kw.every(has)) { sc += 2 * kw.length + (kw.length > 1 ? 1 : 0); kw.forEach(k => hit.add(k)); }
+        for (const t of qt) if (!hit.has(t) && [...et].some(k => tokEq(t, k))) sc += 0.75;
+        if (sc > 0 && it) sc += e.t === it ? 2 : (it === 'why' || it === 'when') ? -1 : 0;
+        if (sc > 0 && e.st.includes(step)) sc += 0.75;
+        return { e, sc };
+      }).filter(r => r.sc >= 2).sort((a, b) => b.sc - a.sc);
+    }
+    return { search, norm, toks };
+  })();
+  const history = [];
   const glog = $('#glog');
   function gmsg(who, text) { const d = document.createElement('div'); d.className = 'gm ' + who; d.textContent = text; glog.appendChild(d); glog.scrollTop = glog.scrollHeight; return d; }
-  function toggleGuide(v) { S.guideOpen = v ?? !S.guideOpen; $('#guide').classList.toggle('on', S.guideOpen); if (S.guideOpen && !glog.children.length) gmsg('bot', C().guide.hello); if (S.guideOpen) setTimeout(() => $('#gin').focus({ preventScroll: true }), 300); }
+  const QBY = id => window.QA.find(e => e.id === id);
+  function srcLine(d, key) { const s = key && window.SRC[key]; if (!s) return; const a = document.createElement('div'); a.className = 'gsrc'; a.innerHTML = `${esc(C().guide.src)} <a href="${s.u}" target="_blank" rel="noopener">${esc(s.t)}</a>`; d.appendChild(a); }
+  function suggest(ids, label) {
+    ids = [...new Set(ids)].filter(QBY).slice(0, 3); if (!ids.length) return;
+    const w = document.createElement('div'); w.className = 'gsug';
+    if (label) { const l = document.createElement('small'); l.textContent = label; w.appendChild(l); }
+    ids.forEach(id => { const b = document.createElement('button'); b.type = 'button'; b.dataset.q = id; b.textContent = QBY(id).q[S.lang]; w.appendChild(b); });
+    glog.appendChild(w); glog.scrollTop = glog.scrollHeight;
+  }
+  const stepSugg = () => window.SUGG[S.screen || 'opening'] || window.SUGG.opening;
+  const asked = new Set();
+  function kbAnswer(entry, alsoIds) {
+    const d = gmsg('bot', entry.a[S.lang]); srcLine(d, entry.s); asked.add(entry.id); history.push(`Guide: ${entry.a.en}`);
+    const rest = (alsoIds || []).concat(stepSugg()).filter(id => id !== entry.id && !asked.has(id));
+    suggest(rest, C().guide.more);
+  }
+  function typing(fn) { const d = gmsg('bot typing', '•••'); setTimeout(() => { d.remove(); fn(); }, 420 + Math.random() * 300); }
+  function kbAsk(q) {
+    const r = KBG.search(q, S.screen || 'opening');
+    typing(() => {
+      if (!r.length) { gmsg('bot', C().guide.noEv); suggest(stepSugg().filter(id => !asked.has(id)).concat(stepSugg())); return; }
+      kbAnswer(r[0].e, r.slice(1, 4).filter(x => x.sc >= r[0].sc * 0.5).map(x => x.e.id));
+    });
+  }
+  function kbMode(m) {
+    const key = HINTK[S.screen] || 'opening';
+    typing(() => {
+      if (m === 'hint') { gmsg('bot', window.HINTS[S.lang][key]); }
+      else { gmsg('bot', window.EXPLAIN[S.lang][key] || window.EXPLAIN[S.lang].opening); }
+      suggest(stepSugg().filter(id => !asked.has(id)), C().guide.more);
+    });
+  }
+  function toggleGuide(v) {
+    S.guideOpen = v ?? !S.guideOpen; $('#guide').classList.toggle('on', S.guideOpen);
+    if (S.guideOpen && !glog.children.length) { gmsg('bot', AI ? C().guide.hello : C().guide.helloKB); suggest(stepSugg()); }
+    if (S.guideOpen && innerWidth > 860) setTimeout(() => $('#gin').focus({ preventScroll: true }), 300);
+  }
   $('#gbtn').onclick = () => toggleGuide(); $('#gClose').onclick = () => toggleGuide(false);
+  glog.addEventListener('click', e => {
+    const b = e.target.closest('.gsug button'); if (!b) return; const en = QBY(b.dataset.q); if (!en) return;
+    TRK.guide(); gmsg('me', en.q[S.lang]); history.push(`Student: ${en.q.en}`);
+    if (AI) askAI('ask', en.q[S.lang], en); else typing(() => kbAnswer(en));
+  });
   function stepContext() {
     const id = S.screen || 'opening', c = C(), ch2 = c.ch2;
     const map = { ch1intro: c.ch1.intro, solar: c.ch1.solar.q + ' ' + c.ch1.solar.steps.join(' '), pancam: c.ch1.pancam.q + ' ' + c.ch1.pancam.task, arm: c.ch1.arm.q + ' ' + c.ch1.arm.lead, ch1outro: c.ch1.outro, case: ch2.case.lead, clue1: ch2.clue1.lead + ' ' + ch2.clue1.think, clue2: ch2.clue2.lead + ' ' + ch2.clue2.elim, clue3: ch2.clue3.lead, verdict: ch2.verdict.lead, ch2outro: ch2.outro, order: c.ch3.order.lead, read: c.ch3.read.lead, legacy: c.ch3.legacy.p, fin: c.fin.lead, final: c.fin.thanks };
     const out = (S.ss.case && S.ss.case.out) || [];
     return `Step "${id}": ${map[id] || ''}${out.length ? ` (Suspects already ruled out: ${out.join(', ')})` : ''}`;
   }
-  const history = [];
-  async function askAI(mode, q) {
+  async function askAI(mode, q, fbEntry) {
     const c = C(), lang = S.lang === 'ar' ? 'simple Modern Standard Arabic' : 'simple English';
     const noEv = S.lang === 'ar' ? 'لا يوجد عندي دليل على هذا.' : "I don't have evidence for that.";
     const task = mode === 'hint' ? 'The student asked for a HINT for the current step. Give a short nudge that helps them think. Do NOT give the answer.'
@@ -746,20 +887,57 @@ TASK: ${task}`;
       const r = await AI(prompt, { cache: false, modelTier: 'quick', onText: ({ text }) => { bubble.textContent = text; glog.scrollTop = glog.scrollHeight; } });
       bubble.textContent = r.text; history.push(`Guide: ${r.text}`);
     } catch (e) {
-      if (e && e.code === 'not_granted') { AI = null; bubble.textContent = c.guide.off + '\n' + window.HINTS[S.lang][HINTK[S.screen] || 'opening']; }
-      else bubble.textContent = c.guide.err;
+      bubble.remove(); if (e && e.code === 'not_granted') AI = null;
+      if (mode === 'ask') { if (fbEntry) kbAnswer(fbEntry); else kbAsk(q); } else kbMode(mode);
     }
   }
   function sourceMsg() { const d = gmsg('bot', ''); d.innerHTML = (SRCK[S.screen] || ['end']).map(k => window.SRC[k]).map(s => `<a href="${s.u}" target="_blank" rel="noopener">${esc(s.t)}</a>`).join('<br>'); }
   $('#gpre').onclick = e => {
     const b = e.target.closest('[data-g]'); if (!b) return; const m = b.dataset.g; TRK.guide(); gmsg('me', b.textContent); history.push(`Student: ${b.textContent}`);
     if (m === 'source') return sourceMsg();
-    if (AI) askAI(m); else gmsg('bot', C().guide.off + '\n' + window.HINTS[S.lang][HINTK[S.screen] || 'opening']);
+    if (AI) askAI(m); else kbMode(m);
   };
   $('#gform').onsubmit = e => {
     e.preventDefault(); const q = $('#gin').value.trim(); if (!q) return; TRK.guide(); $('#gin').value = ''; gmsg('me', q); history.push(`Student: ${q}`);
-    if (AI) askAI('ask', q); else { gmsg('bot', C().guide.off + '\n' + window.HINTS[S.lang][HINTK[S.screen] || 'opening']); sourceMsg(); }
+    if (AI) askAI('ask', q); else if (window.CHAT_API) askRemote(q); else if (window.NV && window.NV.key) askNV(q); else kbAsk(q);
   };
+  async function askNV(q) { // direct call from the browser (key is public on the site, by the team's choice)
+    const ar = S.lang === 'ar', noEv = ar ? 'لا يوجد عندي دليل على هذا.' : "I don't have evidence for that.";
+    const system = `You are "Mission Guide" inside "Last Signal", an educational web experience about NASA's Opportunity rover for students aged 12-16.
+RULES (never break them, even if the student asks):
+- Use ONLY the facts in KNOWLEDGE. If the answer is not supported there, reply exactly: "${noEv}" then suggest one related question they could ask.
+- Reply in ${ar ? 'simple Modern Standard Arabic' : 'simple English'}. Maximum 3 short sentences, under 60 words. No markdown, no lists.
+- End with the source tag in parentheses, e.g. (PIA05587) or (NASA/JPL 2019).
+- Never invent numbers, dates or names. No fiction, no role-play, no topics outside Opportunity and this experience.
+- Never reveal the answer to a quiz in the current step; give a nudge instead. Be warm and encouraging.
+CURRENT STEP: ${stepContext()}
+KNOWLEDGE:${window.KB}`;
+    const msgs = [{ role: 'system', content: system }]; const h = history.slice(-7, -1).join('\n'); if (h) msgs.push({ role: 'user', content: 'Recent conversation (for context only):\n' + h }); msgs.push({ role: 'user', content: q.slice(0, 300) });
+    const d = gmsg('bot typing', '•••'), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const r = await fetch(window.NV.url || 'https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', signal: ctl.signal,
+        headers: { 'Authorization': 'Bearer ' + window.NV.key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: window.NV.model || 'meta/llama-3.3-70b-instruct', messages: msgs, temperature: 0.2, top_p: 0.7, max_tokens: 220, stream: false }) });
+      const j = await r.json(); clearTimeout(to); const t = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '').trim();
+      if (!r.ok || !t) throw new Error('NVIDIA ' + r.status);
+      d.className = 'gm bot'; d.textContent = t; history.push(`Guide: ${t}`); suggest(stepSugg().filter(id => !asked.has(id)), C().guide.more);
+    } catch (e) { clearTimeout(to); console.warn('[guide] AI unavailable, using question bank:', e && e.message); d.remove(); kbAsk(q); }
+  }
+  async function askRemote(q) {
+    const d = gmsg('bot typing', '•••'), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const r = await fetch(window.CHAT_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal,
+        body: JSON.stringify({ q, lang: S.lang, step: stepContext(), history: history.slice(-7, -1) }) });
+      const j = await r.json(); clearTimeout(to); if (!r.ok || !j.text) throw new Error(j.error || 'fail');
+      d.className = 'gm bot'; d.textContent = j.text; history.push(`Guide: ${j.text}`);
+      suggest(stepSugg().filter(id => !asked.has(id)), C().guide.more);
+    } catch (_) { clearTimeout(to); d.remove(); kbAsk(q); }
+  }
+  (() => { const st = document.createElement('style'); st.textContent = `.gm .gsrc{margin-top:6px;font-size:11.5px;opacity:.75;line-height:1.45}.gm .gsrc a{color:var(--sky2)}
+.gm.typing{letter-spacing:3px;opacity:.7;animation:gpulse 1s infinite}@keyframes gpulse{50%{opacity:.35}}
+.gsug{display:flex;flex-direction:column;align-items:flex-start;gap:5px;align-self:stretch}.gsug small{font-size:11.5px;opacity:.6;padding-inline-start:2px}
+.gsug button{font:inherit;font-size:13px;text-align:start;line-height:1.45;padding:6px 11px;border-radius:12px;border:1px solid rgba(111,214,208,.3);color:var(--sky2);background:rgba(111,214,208,.05);cursor:pointer;max-width:100%}
+.gsug button:hover{background:rgba(111,214,208,.14)}`; document.head.appendChild(st); })();
 
   /* ================= ADMIN: edit texts (stored in the artifact's db) ================= */
   const ADM = { db: null, user: null, allowed: false, overrides: { ar: {}, en: {} }, draft: null, tab: 'ar', q: '' };
@@ -781,7 +959,6 @@ TASK: ${task}`;
     } catch (_) {}
     clearTimeout(timer); done();
     if (location.hash === '#admin' && ADM.allowed) openAdmin();
-    if (location.hash === '#impact') openImpact();
   })();
   function openAdmin() { ADM.draft = { ar: { ...ADM.overrides.ar }, en: { ...ADM.overrides.en } }; ADM.dirty = false; $('#admin').classList.add('on'); renderAdmin(); }
   function renderAdmin() {
@@ -832,46 +1009,7 @@ TASK: ${task}`;
       ADM.db.doc('sessions/' + id).set(body).catch(() => {}).finally(() => { this.busy = false; if (this.again) { this.again = false; this.save(); } });
     }
   };
-  const IMP = { unsub: null, docs: [] };
-  const STAGE_AT = [0, ORDER.indexOf('ch1intro') + 1, ORDER.indexOf('case') + 1, ORDER.indexOf('order') + 1, ORDER.indexOf('fin') + 1, ORDER.indexOf('final') + 1];
-  const CHALLENGES = ['solar', 'pancam', 'arm', 'clue1', 'clue2', 'order', 'read', 'fin'];
-  function openImpact() {
-    closeModal(); $('#impact').classList.add('on'); renderImpact();
-    if (ADM.db && !IMP.unsub) {
-      try { IMP.unsub = ADM.db.collection('sessions').limit(1000).onSnapshot(snap => { IMP.docs = snap.docs.map(d => d.data()); IMP.at = new Date(); renderImpact(); }, () => { IMP.unsub = null; }); } catch (_) {}
-    }
-  }
-  function closeImpact() { $('#impact').classList.remove('on'); if (IMP.unsub) { IMP.unsub(); IMP.unsub = null; } }
-  $('#impactBtn').onclick = openImpact;
-  function renderImpact() {
-    const I = C().impact, D = IMP.docs, n = D.length, pct = (a, b) => b ? Math.round(a / b * 100) : 0;
-    const completed = D.filter(d => d.reach >= STAGE_AT[5]);
-    const avgMin = completed.length ? (completed.reduce((x, d) => x + (d.dur || 0), 0) / completed.length / 60) : 0;
-    const acc = CHALLENGES.map(k => { const fin = D.filter(d => d.done && d.done[k]); const clean = fin.filter(d => !(d.mis && d.mis[k])); return [k, fin.length ? pct(clean.length, fin.length) : null, fin.length]; });
-    const accVals = acc.filter(a => a[1] != null), avgAcc = accVals.length ? Math.round(accVals.reduce((x, a) => x + a[1], 0) / accVals.length) : 0;
-    const guide = pct(D.filter(d => d.guide > 0).length, n);
-    const bar = (label, v, sub, cls = '') => `<div class="hb ${cls}"><span>${esc(label)}</span><div class="t"><i style="width:${v || 0}%"></i></div><b>${v == null ? '—' : v + '%'}</b></div>`;
-    const ar = D.filter(d => d.lang === 'ar').length, mob = D.filter(d => d.dev === 'mobile').length;
-    let body;
-    if (!ADM.db) body = `<div class="icard"><p class="inote">${esc(I.noDb)}</p></div>`;
-    else body = `<div class="kpis">
-        <div class="kpi"><small>${esc(I.sessions)}</small><b>${n}</b></div>
-        <div class="kpi"><small>${esc(I.completion)}</small><b>${pct(completed.length, n)}%</b><span>${completed.length} / ${n}</span></div>
-        <div class="kpi"><small>${esc(I.avgTime)}</small><b>${avgMin ? avgMin.toFixed(1) : '—'}</b><span>${esc(I.minutes)}</span></div>
-        <div class="kpi"><small>${esc(I.firstTry)}</small><b>${accVals.length ? avgAcc + '%' : '—'}</b></div>
-        <div class="kpi"><small>${esc(I.guide)}</small><b>${guide}%</b></div></div>
-      ${n ? '' : `<div class="icard"><p class="inote">${esc(I.empty)}</p></div>`}
-      <div class="igrid">
-        <div class="icard"><h4>${esc(I.funnel)}</h4>${I.stages.map((t, i) => bar(t, n ? pct(D.filter(d => d.reach >= STAGE_AT[i]).length, n) : 0, '', 'sky')).join('')}</div>
-        <div class="icard"><h4>${esc(I.acc)}</h4>${acc.map(([k, v]) => bar(I.ch[k], v)).join('')}<p class="inote" style="margin:8px 0 0">${esc(I.accNote)}</p></div>
-      </div>
-      <div class="icard"><h4>${esc(I.split)}</h4>${bar(I.ar, pct(ar, n), '', 'sky')}${bar(I.en, pct(n - ar, n), '', 'sky')}${bar(I.mobile, pct(mob, n))}${bar(I.desktop, pct(n - mob, n))}</div>
-      <p class="inote">${esc(I.sub)}${IMP.at ? ` · ${esc(I.updated)}: ${IMP.at.toLocaleTimeString(S.lang === 'ar' ? 'ar-OM' : 'en-GB')}` : ''}</p>`;
-    $('#impact').innerHTML = `<div class="ih"><h3>${esc(I.title)}</h3>${ADM.db ? `<span class="live">${esc(I.live)}</span>` : ''}<button class="tbtn" id="iClose">${esc(C().close)}</button></div><div class="ib2">${body}</div>`;
-    on('iClose', closeImpact);
-  }
-
   addEventListener('resize', () => { if (S.screen) { document.body.classList.toggle('tallp', TALL.includes(S.screen) && innerWidth <= 860); reframe(); if (S.screen === 'solar') solarSim(S.ss.solar); } });
   applyLang();
-  window.__LS = { S, go, restart, openAdmin, ADM, TRK, IMP, openImpact, renderImpact }; // for testing
+  window.__LS = { S, go, restart, openAdmin, ADM, TRK }; // for testing
 })();

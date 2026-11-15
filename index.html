@@ -411,28 +411,6 @@ html[dir=rtl] .strip .sl.new{animation-name:typeInR}
 #evfly .evbar i{display:block;height:100%;width:100%;background:var(--amber);transform-origin:left;animation:evbar 5s linear forwards}
 html[dir=rtl] #evfly .evbar i{transform-origin:right}
 @keyframes evbar{to{transform:scaleX(0)}}
-/* impact dashboard */
-#impact{position:fixed;inset:0;z-index:58;background:radial-gradient(ellipse at top,#1a120d,#0b0e12 60%);display:none;flex-direction:column;overflow:auto}
-#impact.on{display:flex}
-#impact .ih{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:calc(16px + var(--safeT)) 22px 12px;border-bottom:1px solid var(--line)}
-#impact .ih h3{margin:0;font-size:20px;flex:1}
-#impact .ib2{padding:18px 22px 40px;max-width:1100px;width:100%;margin:0 auto;display:grid;gap:16px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
-.kpi{padding:16px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid var(--line)}
-.kpi small{display:block;color:var(--muted);font-size:13px}
-.kpi b{display:block;font-size:34px;font-family:var(--mono);margin-top:4px;color:#fff}
-.kpi span{font-size:12px;color:var(--dim)}
-.icard{padding:16px 18px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid var(--line)}
-.icard h4{margin:0 0 12px;font-size:15px}
-.hb{display:grid;grid-template-columns:minmax(110px,180px) 1fr 52px;gap:10px;align-items:center;font-size:13.5px;margin-bottom:8px}
-.hb .t{height:12px;border-radius:7px;background:rgba(255,255,255,.06);overflow:hidden}
-.hb .t i{display:block;height:100%;border-radius:7px;background:linear-gradient(90deg,var(--copper),var(--amber));transition:width .8s var(--ease)}
-.hb.sky .t i{background:linear-gradient(90deg,#3fa9a0,var(--sky))}
-.hb b{font-family:var(--mono);font-weight:500;text-align:end}
-.igrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ok)}
-.live:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ok);animation:blink 1.4s infinite}
-.inote{font-size:13px;color:var(--muted);line-height:1.7}
 @media (max-width:860px){
   #prog{position:absolute;inset-inline:0;bottom:-2px;margin:0;max-width:none;gap:3px;padding:0 12px}
   #prog .seg{height:3px}
@@ -482,7 +460,6 @@ html[dir=rtl] #evfly .evbar i{transform-origin:right}
     <button class="ib lang" id="langBtn">EN</button>
     <button class="ib" id="muteBtn" aria-label="sound"></button>
     <button class="ib" id="restartBtn" aria-label="restart"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/></svg></button>
-    <button class="ib" id="impactBtn" aria-label="impact"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16"/><rect x="6" y="11" width="3" height="6"/><rect x="11" y="7" width="3" height="10"/><rect x="16" y="13" width="3" height="4"/></svg></button>
     <button class="ib" id="srcBtn" aria-label="sources"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></button>
   </div>
 </header>
@@ -537,7 +514,6 @@ html[dir=rtl] #evfly .evbar i{transform-origin:right}
 
 <div id="evfly"><small id="evflyS"></small><b id="evflyT"></b><p id="evflyP"></p><div class="evbar"><i></i></div><button id="evOk">تم</button></div>
 <div id="admin" role="dialog" aria-modal="true"></div>
-<div id="impact" role="dialog" aria-modal="true"></div>
 <div id="modal" role="dialog" aria-modal="true"><div class="box" id="mbox"></div></div>
 
 <script src="content.js"></script>
